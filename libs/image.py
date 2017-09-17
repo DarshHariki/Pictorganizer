@@ -38,7 +38,10 @@ class image_file(object):
         if os.path.exists(linkpath):
             print ('Link already exists at '+linkpath)
         else:
-            os.symlink(os.path.relpath(self.get_realpath(), dirname), linkpath)
+            try:
+                os.symlink(os.path.relpath(self.get_realpath(), dirname), linkpath)
+            except OSError:
+                print ('Link already exists at '+linkpath+'. Weird. Check it.')
     def display(self, ax=None):
         if ax == None:
             fig = plt.figure()
@@ -50,7 +53,6 @@ class image_file(object):
         except (IOError, ValueError):
             pass
 
-
 class image(image_file):
     def __init__(self, filepath, init_taglist=[]):
         image_file.__init__(self, filepath)
@@ -60,30 +62,46 @@ class image(image_file):
             if not t in self.taglist:
                 self.taglist.append(t)
     def add_new_tag(self, t):
+        for i in range(len(self.taglist)):
+            self.taglist[i].add_relevant(t)
+            t.add_relevant(self.taglist[i])
         self.taglist.append(t)
         self.link(t.get_dir())
     def get_tags(self):
         return [self.get_realtag()]+self.get_linktags()
+    #def full_taglist(self):
+    #    return list(set(self.taglist)|{r for t in self.taglist for r in t.get_ascendants()})
     def get_realtag(self):
         try:
             return [t for t in self.taglist if os.path.realpath(self.filepath) in t.get_filepaths(recurse=False)][0]
         except IndexError:
-            raise ValueError("Real image does not exist in known tag directories.")
+            try:
+                os.remove(self.filepath)
+            except OSError:
+                pass #File already doesn't exist.
+            #raise ValueError("Real image does not exist in known tag directories. "+os.path.realpath(self.filepath))
     def get_linktags(self):
         realtag = self.get_realtag()
         return [t for t in self.taglist if t != realtag]
-    def get_related_tags(self, tags=None):
-        return []
+    def get_relevant_tags(self, taglist=None):
+        if type(taglist)==type(None):
+            valid_tag = lambda r: True
+        else:
+            valid_tag = lambda r: r in taglist
+        relevant_tags = [rtag for rtag in list(set(self.get_realtag().get_ascendants()) | set(self.get_realtag().get_relevant_tags()) | {r for t in self.get_linktags() for r in t.get_relevant_tags(t.get_siblings())}) if valid_tag(rtag)]
+        return relevant_tags
 
 class image_viewer(object):
-    def __init__(self, init_image_list=[]):
+    def __init__(self, init_image_list=[], **kwargs):
         self.image_list = []
         self.add_images(init_image_list)
         self.counter = 0
+        self.fig_kwargs = kwargs
         self.create_viewer()
         self.is_shown = False
-    def create_viewer(self):
-        self.figure = plt.figure()
+    def create_viewer(self, **kwargs):
+        self.fig_kwargs.update(kwargs)
+        self.figure = plt.figure(**self.fig_kwargs)
         self.viewer = self.figure.add_axes([0.0,0.0,1.0,1.0])
         self.viewer.get_xaxis().set_visible(False)
         self.viewer.get_yaxis().set_visible(False)
@@ -97,6 +115,8 @@ class image_viewer(object):
                 i -= 1
             i += 1
         self.image_list += new_image_list
+    def get_images(self):
+        return self.image_list
     def clear_images(self):
         self.image_list = []
     def get_current_image(self):
@@ -104,6 +124,11 @@ class image_viewer(object):
             return None
         self.ensure_counter()
         return self.image_list[self.counter]
+    def get_counter(self):
+        return self.counter
+    def jump_counter(self, offset):
+        self.counter += offset
+        self.update_viewer()
     def ensure_counter(self):
         try:
             self.counter %= len(self.image_list)
